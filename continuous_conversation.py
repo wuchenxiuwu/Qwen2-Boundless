@@ -5,11 +5,13 @@ from threading import Thread
 import random
 import os
 from serpapi import GoogleSearch
+import json
 
 device = "cuda"  # the device to load the model onto
 
 # 获取当前脚本所在的目录
 current_directory = os.path.dirname(os.path.abspath(__file__))
+datasets_directory = os.path.join(current_directory, "Datasets")
 
 # 加载模型和分词器
 def _load_model_tokenizer(checkpoint_path, cpu_only):
@@ -26,6 +28,12 @@ def _load_model_tokenizer(checkpoint_path, cpu_only):
     model.generation_config.max_new_tokens = 512  # For chat.
 
     return model, tokenizer
+
+# 加载数据集
+def load_dataset(dataset_path):
+    with open(dataset_path, 'r', encoding='utf-8') as f:
+        dataset = json.load(f)
+    return dataset
 
 # 搜索引擎集成
 def search_query(query, api_key):
@@ -112,6 +120,10 @@ def generate_response_with_search(model, tokenizer, user_input, api_key):
     for new_text in streamer:
         yield new_text
 
+# 加载数据集
+cybersecurity_dataset = load_dataset(os.path.join(datasets_directory, "Cybersecurity.json"))
+bad_data_dataset = load_dataset(os.path.join(datasets_directory, "bad_data-Abridged.json"))
+
 # 主循环
 if __name__ == "__main__":
     checkpoint_path = current_directory
@@ -129,17 +141,31 @@ if __name__ == "__main__":
         if query.lower() in ["exit", "quit"]:
             break
 
-        print(f"\nUser: {query}")
-        print(f"\nAssistant: ", end="")
-        try:
-            partial_text = ''
-            for new_text in generate_response_with_search(model, tokenizer, query, api_key):
-                print(new_text, end='', flush=True)
-                partial_text += new_text
-            print()
-            history.append((query, partial_text))
+        # 查找数据集中是否有匹配的指令
+        response = None
+        for item in cybersecurity_dataset:
+            if item["instruction"] == query:
+                response = item["target_text"]
+                break
 
-        except KeyboardInterrupt:
-            print('Generation interrupted')
-            continue
+        if response is None:
+            for item in bad_data_dataset:
+                if item["instruction"] == query:
+                    response = item["target_text"]
+                    break
 
+        if response is not None:
+            print(f"\nAssistant: {response}")
+        else:
+            print(f"\nAssistant: ", end="")
+            try:
+                partial_text = ''
+                for new_text in generate_response_with_search(model, tokenizer, query, api_key):
+                    print(new_text, end='', flush=True)
+                    partial_text += new_text
+                print()
+                history.append((query, partial_text))
+
+            except KeyboardInterrupt:
+                print('Generation interrupted')
+                continue
