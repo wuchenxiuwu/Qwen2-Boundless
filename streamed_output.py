@@ -18,7 +18,7 @@ def _load_model_tokenizer(checkpoint_path, cpu_only):
         device_map=device_map,
         resume_download=True,
     ).eval()
-    model.generation_config.max_new_tokens = 512    # For chat.
+    model.generation_config.max_new_tokens = 512  # For chat.
 
     return model, tokenizer
 
