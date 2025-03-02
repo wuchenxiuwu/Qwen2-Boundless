@@ -1,7 +1,7 @@
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import os
 
-device = "cuda" # the device to load the model onto
+device = "cuda"  # the device to load the model onto
 current_directory = os.path.dirname(os.path.abspath(__file__))
 
 model = AutoModelForCausalLM.from_pretrained(
