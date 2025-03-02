@@ -1,5 +1,8 @@
-from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
+from transformers.trainer_utils import set_seed
+from threading import Thread
+import random
 import os
 from serpapi import GoogleSearch
 
@@ -9,12 +12,20 @@ device = "cuda"  # the device to load the model onto
 current_directory = os.path.dirname(os.path.abspath(__file__))
 
 # 加载模型和分词器
-model = AutoModelForCausalLM.from_pretrained(
-    current_directory,
-    torch_dtype="auto",
-    device_map="auto"
-)
-tokenizer = AutoTokenizer.from_pretrained(current_directory)
+def _load_model_tokenizer(checkpoint_path, cpu_only):
+    tokenizer = AutoTokenizer.from_pretrained(checkpoint_path, resume_download=True)
+
+    device_map = "cpu" if cpu_only else "auto"
+
+    model = AutoModelForCausalLM.from_pretrained(
+        checkpoint_path,
+        torch_dtype="auto",
+        device_map=device_map,
+        resume_download=True,
+    ).eval()
+    model.generation_config.max_new_tokens = 512  # For chat.
+
+    return model, tokenizer
 
 # 搜索引擎集成
 def search_query(query, api_key):
@@ -86,39 +97,48 @@ def generate_response_with_search(model, tokenizer, user_input, api_key):
     # 使用模型生成响应
     inputs = tokenizer.apply_chat_template(
         messages,
-        tokenize=False,
-        add_generation_prompt=True
+        add_generation_prompt=True,
+        return_tensors='pt',
     )
-    model_inputs = tokenizer([inputs], return_tensors="pt").to(device)
-
-    generated_ids = model.generate(
-        model_inputs.input_ids,
-        max_new_tokens=512
+    inputs = inputs.to(model.device)
+    streamer = TextIteratorStreamer(tokenizer=tokenizer, skip_prompt=True, timeout=60.0, skip_special_tokens=True)
+    generation_kwargs = dict(
+        input_ids=inputs,
+        streamer=streamer,
     )
-    generated_ids = [
-        output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
-    ]
+    thread = Thread(target=model.generate, kwargs=generation_kwargs)
+    thread.start()
 
-    response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-    return response
+    for new_text in streamer:
+        yield new_text
 
 # 主循环
 if __name__ == "__main__":
-    context_manager = DialogueContext()
+    checkpoint_path = current_directory
+    seed = random.randint(0, 2**32 - 1)  # 随机生成一个种子
+    set_seed(seed)  # 设置随机种子
+    cpu_only = False
+
+    model, tokenizer = _load_model_tokenizer(checkpoint_path, cpu_only)
     api_key = "你的 API 密钥"  # 替换为你的 SerpAPI 密钥
 
+    history = []
+
     while True:
-        user_input = input("User: ")
-        if user_input.lower() in ["exit", "quit"]:
+        query = input('User: ').strip()
+        if query.lower() in ["exit", "quit"]:
             break
 
-        # 将用户输入添加到对话中
-        context_manager.add_context(user_input, "")
+        print(f"\nUser: {query}")
+        print(f"\nAssistant: ", end="")
+        try:
+            partial_text = ''
+            for new_text in generate_response_with_search(model, tokenizer, query, api_key):
+                print(new_text, end='', flush=True)
+                partial_text += new_text
+            print()
+            history.append((query, partial_text))
 
-        # 生成响应
-        response = generate_response_with_search(model, tokenizer, user_input, api_key)
-
-        # 将生成的响应添加到对话中
-        context_manager.add_context("", response)
-
-        print(f"Assistant: {response}")
+        except KeyboardInterrupt:
+            print('Generation interrupted')
+            continue
